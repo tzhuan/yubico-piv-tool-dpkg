@@ -31,6 +31,7 @@
 #include "openssl_utils.h"
 #include <stdbool.h>
 #include "../tool/util.h" // TODO: share this better?
+#include "../tool/openssl-compat.h" // TODO: share this better?
 #include "debug.h"
 #include <string.h>
 
@@ -115,8 +116,7 @@ CK_RV do_create_empty_cert(CK_BYTE_PTR in, CK_ULONG in_len, CK_BBOOL is_rsa,
     if(bignum_e == NULL)
       goto create_empty_cert_cleanup;
 
-    rsa->n = bignum_n;
-    rsa->e = bignum_e;
+    RSA_set0_key(rsa, bignum_n, bignum_e, NULL);
 
     if (EVP_PKEY_set1_RSA(key, rsa) == 0)
       goto create_empty_cert_cleanup;
@@ -165,6 +165,7 @@ CK_RV do_create_empty_cert(CK_BYTE_PTR in, CK_ULONG in_len, CK_BBOOL is_rsa,
   X509_set_notBefore(cert, tm);
   X509_set_notAfter(cert, tm);
 
+#if OPENSSL_VERSION_NUMBER < 10100000L
   // Manually set the signature algorithms.
   // OpenSSL 1.0.1i complains about empty DER fields
   // 8 => md5WithRsaEncryption
@@ -173,7 +174,9 @@ CK_RV do_create_empty_cert(CK_BYTE_PTR in, CK_ULONG in_len, CK_BBOOL is_rsa,
 
   // Manually set a signature (same reason as before)
   ASN1_BIT_STRING_set_bit(cert->signature, 8, 1);
-  ASN1_BIT_STRING_set(cert->signature, "\x00", 1);
+  ASN1_BIT_STRING_set(cert->signature, (unsigned char*)"\x00", 1);
+  ASN1_BIT_STRING_set(cert->signature, (unsigned char*)"\x00", 1);
+#endif
 
   len = i2d_X509(cert, NULL);
   if (len < 0)
@@ -316,7 +319,7 @@ CK_RV do_store_pubk(X509 *cert, EVP_PKEY **key) {
 
 CK_KEY_TYPE do_get_key_type(EVP_PKEY *key) {
 
-  switch (key->type) {
+  switch (EVP_PKEY_id(key)) {
   case EVP_PKEY_RSA:
   case EVP_PKEY_RSA2:
     return CKK_RSA;
@@ -349,18 +352,20 @@ CK_ULONG do_get_rsa_modulus_length(EVP_PKEY *key) {
 
 CK_RV do_get_modulus(EVP_PKEY *key, CK_BYTE_PTR data, CK_ULONG_PTR len) {
   RSA *rsa;
+  const BIGNUM *n;
 
   rsa = EVP_PKEY_get1_RSA(key);
   if (rsa == NULL)
     return CKR_FUNCTION_FAILED;
 
-  if ((CK_ULONG)BN_num_bytes(rsa->n) > *len) {
+  RSA_get0_key(rsa, &n, NULL, NULL);
+  if ((CK_ULONG)BN_num_bytes(n) > *len) {
     RSA_free(rsa);
     rsa = NULL;
     return CKR_BUFFER_TOO_SMALL;
   }
 
-  *len = (CK_ULONG)BN_bn2bin(rsa->n, data);
+  *len = (CK_ULONG)BN_bn2bin(n, data);
 
   RSA_free(rsa);
   rsa = NULL;
@@ -372,18 +377,20 @@ CK_RV do_get_public_exponent(EVP_PKEY *key, CK_BYTE_PTR data, CK_ULONG_PTR len) 
 
   CK_ULONG e = 0;
   RSA *rsa;
+  const BIGNUM *bn_e;
 
   rsa = EVP_PKEY_get1_RSA(key);
   if (rsa == NULL)
     return CKR_FUNCTION_FAILED;
 
-  if ((CK_ULONG)BN_num_bytes(rsa->e) > *len) {
+  RSA_get0_key(rsa, NULL, &bn_e, NULL);
+  if ((CK_ULONG)BN_num_bytes(bn_e) > *len) {
     RSA_free(rsa);
     rsa = NULL;
     return CKR_BUFFER_TOO_SMALL;
   }
 
-  *len = (CK_ULONG)BN_bn2bin(rsa->e, data);
+  *len = (CK_ULONG)BN_bn2bin(bn_e, data);
 
   RSA_free(rsa);
   rsa = NULL;
@@ -406,7 +413,7 @@ CK_RV do_get_public_key(EVP_PKEY *key, CK_BYTE_PTR data, CK_ULONG_PTR len) {
   const EC_POINT *ecp;
   point_conversion_form_t pcf = POINT_CONVERSION_UNCOMPRESSED;
 
-  switch(key->type) {
+  switch(EVP_PKEY_id(key)) {
   case EVP_PKEY_RSA:
   case EVP_PKEY_RSA2:
 
@@ -467,18 +474,32 @@ CK_RV do_get_public_key(EVP_PKEY *key, CK_BYTE_PTR data, CK_ULONG_PTR len) {
 
 }
 
-CK_RV do_encode_rsa_public_key(CK_BYTE_PTR data, CK_ULONG len, RSA **key) {
-
-  const unsigned char *p = data;
-
-  if (data == NULL)
+CK_RV do_encode_rsa_public_key(ykcs11_rsa_key_t **key, CK_BYTE_PTR modulus,
+          CK_ULONG mlen, CK_BYTE_PTR exponent, CK_ULONG elen) {
+  ykcs11_rsa_key_t *k;
+  BIGNUM *k_n = NULL, *k_e = NULL;
+  if (modulus == NULL || exponent == NULL)
     return CKR_ARGUMENTS_BAD;
 
-  if ((*key = d2i_RSAPublicKey(NULL, &p, (long) len)) == NULL)
+  if ((k = RSA_new()) == NULL)
+    return CKR_HOST_MEMORY;
+
+  if ((k_n = BN_bin2bn(modulus, mlen, NULL)) == NULL)
     return CKR_FUNCTION_FAILED;
 
-  return CKR_OK;
+  if ((k_e = BN_bin2bn(exponent, elen, NULL)) == NULL)
+    return CKR_FUNCTION_FAILED;
 
+  if (RSA_set0_key(k, k_n, k_e, NULL) == 0)
+    return CKR_FUNCTION_FAILED;
+
+  *key = k;
+  return CKR_OK;
+}
+
+CK_RV do_free_rsa_public_key(ykcs11_rsa_key_t *key) {
+  RSA_free(key);
+  return CKR_OK;
 }
 
 CK_RV do_get_curve_parameters(EVP_PKEY *key, CK_BYTE_PTR data, CK_ULONG_PTR len) {
@@ -555,18 +576,15 @@ CK_RV do_pkcs_1_digest_info(CK_BYTE_PTR in, CK_ULONG in_len, int nid, CK_BYTE_PT
 
 }
 
-CK_RV do_pkcs_pss(RSA *key, CK_BYTE_PTR in, CK_ULONG in_len, int nid,
-          CK_BYTE_PTR out, CK_ULONG_PTR out_len) {
-  unsigned char em[512]; // Max for this is ceil((|key_len_bits| - 1) / 8)
+CK_RV do_pkcs_pss(ykcs11_rsa_key_t *key, CK_BYTE_PTR in, CK_ULONG in_len,
+          int nid, CK_BYTE_PTR out, CK_ULONG_PTR out_len) {
+  unsigned char em[RSA_size(key)];
 
   OpenSSL_add_all_digests();
 
+  DBG("Apply PSS padding to %lu bytes and get %d", in_len, RSA_size(key));
+
   // TODO: rand must be seeded first (should be automatic)
-  if (*out_len < (CK_ULONG)RSA_size(key))
-    return CKR_BUFFER_TOO_SMALL;
-
-  DBG("Apply PSS padding to %lu bytes and get %d\n", in_len, RSA_size(key));
-
   if (out != in)
     memcpy(out, in, in_len);
 
@@ -576,7 +594,8 @@ CK_RV do_pkcs_pss(RSA *key, CK_BYTE_PTR in, CK_ULONG in_len, int nid,
     return CKR_FUNCTION_FAILED;
   }
 
-  *out_len = (CK_ULONG) RSA_size(key);
+  memcpy(out, em, sizeof(em));
+  *out_len = (CK_ULONG) sizeof(em);
 
   EVP_cleanup();
 

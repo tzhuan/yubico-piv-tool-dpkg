@@ -93,6 +93,22 @@ static CK_RV COMMON_token_generate_key(ykpiv_state *state, CK_BBOOL rsa,
 
   CK_RV rv;
 
+  if(rsa) {
+    char version[7];
+    if(ykpiv_get_version(state, version, sizeof(version)) == YKPIV_OK) {
+      int major, minor, build;
+      int match = sscanf(version, "%d.%d.%d", &major, &minor, &build);
+      if(match == 3 && major == 4 && (minor < 3 || (minor == 3 && build < 5))) {
+        DBG("On-chip RSA key generation on this YubiKey has been blocked.\n");
+        DBG("Please see https://yubi.co/ysa201701/ for details.\n");
+        return CKR_FUNCTION_FAILED;
+      }
+    } else {
+      DBG("Failed to communicate.\n");
+      return CKR_DEVICE_ERROR;
+    }
+  }
+
   templ[3] = key;
 
   *in_ptr++ = 0xac;
@@ -180,7 +196,7 @@ static CK_RV COMMON_token_generate_key(ykpiv_state *state, CK_BBOOL rsa,
   *certptr++ = 0;
 
   // Store the certificate into the token
-  if (ykpiv_save_object(state, key_to_object_id(key), data, (size_t)(certptr - data)) != YKPIV_OK)
+  if (ykpiv_save_object(state, ykpiv_util_slot_object(key), data, (size_t)(certptr - data)) != YKPIV_OK)
     return CKR_DEVICE_ERROR;
 
   return CKR_OK;

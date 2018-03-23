@@ -1,4 +1,4 @@
-# Copyright (c) 2015-2016 Yubico AB
+# Copyright (c) 2014-2017 Yubico AB
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -25,28 +25,34 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#TESTS_ENVIRONMENT = export VERSION=$(PACKAGE_VERSION); export EXEEXT=$(EXEEXT);
+#
+# Note: this build script is for testing OpenSSL 1.1 builds.  The official
+# Linux release builds are handled by the standard Makefile.
+#
+PACKAGE=yubico-piv-tool
+OPENSSLVERSION=1.1.0g
 
-#LOG_COMPILER = $(VALGRIND)
+all: linux
 
-AM_CFLAGS = $(WARN_CFLAGS) @CHECK_CFLAGS@
-AM_CPPFLAGS = -I$(top_srcdir)/lib -I$(top_builddir)/lib
-AM_CPPFLAGS += -I$(top_srcdir)/ykcs11 -I$(top_builddir)/ykcs11
-AM_CPPFLAGS += $(OPENSSL_CFLAGS)
+doit:
+	rm -rf tmp && mkdir tmp && cd tmp && \
+	mkdir -p root/licenses && \
+	cp ../openssl-$(OPENSSLVERSION).tar.gz . || \
+		curl -L -O "https://www.openssl.org/source/openssl-$(OPENSSLVERSION).tar.gz" && \
+	tar xfz openssl-$(OPENSSLVERSION).tar.gz && \
+	cd openssl-$(OPENSSLVERSION) && \
+	./Configure linux-x86_64 shared --prefix=$(PWD)/tmp/root $(CFLAGS) && \
+	make all install VERSION="$(OPENSSLVERSION)" && \
+	cp LICENSE $(PWD)/tmp$(ARCH)/root/licenses/openssl.txt && \
+	cd .. && \
+	cp ../$(PACKAGE)-$(VERSION).tar.gz . && \
+	tar xfz $(PACKAGE)-$(VERSION).tar.gz && \
+	cd $(PACKAGE)-$(VERSION)/ && \
+	CFLAGS=$(CFLAGS) PKG_CONFIG_PATH=$(PWD)/tmp/root/lib/pkgconfig ./configure --prefix=$(PWD)/tmp/root && \
+	make install $(CHECK) && \
+	cd .. && \
+	cd root && \
+	zip -r ../../$(PACKAGE)-$(VERSION)-linux-openssl-$(OPENSSLVERSION).zip *
 
-AM_LDFLAGS = @CHECK_LIBS@
-
-if COMPILER_CLANG
-AM_LDFLAGS += -no-fast-install
-else
-AM_LDFLAGS += -no-install
-endif
-
-ykcs11_tests_LDADD = ../libykcs11.la $(OPENSSL_LIBS) ../../tool/libpiv_util.la
-ykcs11_tests_SOURCES = ykcs11_tests.c
-check_PROGRAMS = ykcs11_tests
-TESTS = reset.sh $(check_PROGRAMS)
-
-if ENABLE_COV
-AM_LDFLAGS += --coverage
-endif
+linux:
+	$(MAKE) -f linux.mk doit CHECK=check

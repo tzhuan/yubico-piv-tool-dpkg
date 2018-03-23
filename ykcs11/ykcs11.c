@@ -38,6 +38,7 @@
 #include "utils.h"
 #include "mechanisms.h"
 #include "openssl_types.h"
+#include "openssl_utils.h"
 #include "debug.h"
 
 #include <stdbool.h>
@@ -198,17 +199,25 @@ CK_DEFINE_FUNCTION(CK_RV, C_GetSlotList)(
     return CKR_CRYPTOKI_NOT_INITIALIZED;
   }
 
-  if (pSlotList == NULL_PTR) {
-    // Just return the number of slots
+  if (pulCount) {
     *pulCount = n_slots;
 
     if (tokenPresent)
       *pulCount = n_slots_with_token;
     else
       *pulCount = n_slots;
+  }
+
+  if (pSlotList == NULL_PTR) {
+    // Just return the number of slots
 
     DOUT;
     return CKR_OK;
+  }
+
+  if (!pulCount) {
+    DOUT;
+    return CKR_ARGUMENTS_BAD;
   }
 
   if ((tokenPresent && *pulCount < n_slots_with_token) || (!tokenPresent && *pulCount < n_slots)) {
@@ -1210,6 +1219,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_DestroyObject)(
 
   rv = delete_cert(cert_id);
   if (rv != CKR_OK) {
+    free(obj_ptr);
     DBG("Unable to delete certificate data");
     return CKR_FUNCTION_FAILED;
   }
@@ -1684,11 +1694,13 @@ CK_DEFINE_FUNCTION(CK_RV, C_SignInit)(
 {
   CK_KEY_TYPE  type = 0;
   CK_ULONG     key_len = 0;
+  CK_BYTE      exp[3];
   CK_BYTE      buf[1024];
   CK_ATTRIBUTE template[] = {
     {CKA_KEY_TYPE, &type, sizeof(type)},
     {CKA_MODULUS_BITS, &key_len, sizeof(key_len)},
     {CKA_MODULUS, NULL, 0},
+    {CKA_PUBLIC_EXPONENT, exp, sizeof(exp)},
     {CKA_EC_POINT, buf, sizeof(buf)},
   };
 
@@ -1751,18 +1763,22 @@ CK_DEFINE_FUNCTION(CK_RV, C_SignInit)(
 
     // Also store the raw public key if the mechanism is PSS
     if (is_PSS_mechanism(pMechanism->mechanism)) {
-      op_info.op.sign.key = malloc(key_len);
-      if (op_info.op.sign.key == NULL)
-        return CKR_HOST_MEMORY;
-
-      template[2].pValue = op_info.op.sign.key;
-      template[2].ulValueLen = key_len;
+      template[2].pValue = buf;
+      template[2].ulValueLen = (key_len + 7) / 8 ;
 
       if (get_attribute(&session, hKey, template + 2) != CKR_OK) {
         DBG("Unable to get public key");
         return CKR_KEY_HANDLE_INVALID;
       }
 
+      if (get_attribute(&session, hKey, template + 3) != CKR_OK) {
+        DBG("Unable to get public exponent");
+        return CKR_KEY_HANDLE_INVALID;
+      }
+
+      if (do_encode_rsa_public_key(&op_info.op.sign.key, buf, (key_len + 7) / 8, exp, sizeof(exp)) != CKR_OK) {
+        return CKR_FUNCTION_FAILED;
+      }
     }
     else {
       op_info.op.sign.key = NULL;
@@ -1771,7 +1787,7 @@ CK_DEFINE_FUNCTION(CK_RV, C_SignInit)(
   }
   else {
     // ECDSA key
-    if (get_attribute(&session, hKey, template + 3) != CKR_OK) {
+    if (get_attribute(&session, hKey, template + 4) != CKR_OK) {
       DBG("Unable to get key length");
       return CKR_KEY_HANDLE_INVALID;
     }
@@ -1862,7 +1878,15 @@ CK_DEFINE_FUNCTION(CK_RV, C_Sign)(
 
   if (pSignature == NULL_PTR) {
     // Just return the size of the signature
-    *pulSignatureLen = op_info.op.sign.key_len / 8 * 2 + 32; // Approximate the size of the signature. Specs agree with this.
+    if (is_RSA_mechanism(op_info.mechanism.mechanism)) {
+      // RSA
+       *pulSignatureLen = (op_info.op.sign.key_len + 7) / 8;
+    }
+    else {
+      // ECDSA
+      *pulSignatureLen = ((op_info.op.sign.key_len + 7) / 8) * 2;
+    }
+
     DBG("The size of the signature will be %lu", *pulSignatureLen);
 
     DOUT;

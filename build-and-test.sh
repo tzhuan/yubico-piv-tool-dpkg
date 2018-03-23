@@ -1,4 +1,6 @@
-# Copyright (c) 2015-2016 Yubico AB
+#!/bin/sh
+
+# Copyright (c) 2014-2016 Yubico AB
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -25,28 +27,51 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-#TESTS_ENVIRONMENT = export VERSION=$(PACKAGE_VERSION); export EXEEXT=$(EXEEXT);
 
-#LOG_COMPILER = $(VALGRIND)
-
-AM_CFLAGS = $(WARN_CFLAGS) @CHECK_CFLAGS@
-AM_CPPFLAGS = -I$(top_srcdir)/lib -I$(top_builddir)/lib
-AM_CPPFLAGS += -I$(top_srcdir)/ykcs11 -I$(top_builddir)/ykcs11
-AM_CPPFLAGS += $(OPENSSL_CFLAGS)
-
-AM_LDFLAGS = @CHECK_LIBS@
-
-if COMPILER_CLANG
-AM_LDFLAGS += -no-fast-install
+if [ "x$TRAVIS_OS_NAME" != "xosx" ]; then
+    sudo apt-get update -qq
+    sudo apt-get remove -qq -y $REMOVE
+    sudo apt-get autoremove -qq
+    sudo apt-get install -qq -y gengetopt help2man check $EXTRA
+    TAR=tar
 else
-AM_LDFLAGS += -no-install
-endif
+    ARCH=osx
+    brew update
+    brew uninstall libtool
+    brew install libtool
+    brew install help2man
+    brew install check
+    brew install pkg-config
+    brew install gengetopt
+    brew install gnu-tar
+    TAR=gtar
+fi
 
-ykcs11_tests_LDADD = ../libykcs11.la $(OPENSSL_LIBS) ../../tool/libpiv_util.la
-ykcs11_tests_SOURCES = ykcs11_tests.c
-check_PROGRAMS = ykcs11_tests
-TESTS = reset.sh $(check_PROGRAMS)
+set -e
 
-if ENABLE_COV
-AM_LDFLAGS += --coverage
-endif
+autoreconf -ifv
+
+if [ "x$ARCH" != "x" ]; then
+    version=`cat NEWS  | grep unreleased | cut -d' ' -f3`
+    set +e
+    $TAR --exclude .git --transform="s/^\./yubico-piv-tool-${version}/" -czf yubico-piv-tool-${version}.tar.gz .
+    set -e
+    if [ "x$ARCH" != "xosx" ]; then
+        make -f windows.mk ${ARCH}bit VERSION=$version
+    else
+        make -f mac.mk mac VERSION=$version
+    fi
+elif [ "x$BUILD_OPENSSL_VERSION" = "x1.1" ]; then
+    version=`cat NEWS  | grep unreleased | cut -d' ' -f3`
+    set +e
+    $TAR --exclude .git --transform="s/^\./yubico-piv-tool-${version}/" -czf yubico-piv-tool-${version}.tar.gz .
+    set -e
+    make -f linux.mk VERSION=$version
+else
+    ./configure $COVERAGE
+    make all check
+    if [ "x$COVERAGE" != "x" ]; then
+        gem install coveralls-lcov
+        coveralls-lcov coverage/app2.info
+    fi
+fi

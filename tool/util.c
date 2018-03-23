@@ -37,6 +37,7 @@
 #include <windows.h>
 #endif
 
+#include "openssl-compat.h"
 #include <openssl/evp.h>
 #include <openssl/x509.h>
 #include <openssl/rsa.h>
@@ -46,12 +47,31 @@
 #include "cmdline.h"
 #include "util.h"
 
-FILE *open_file(const char *file_name, int mode) {
+FILE *open_file(const char *file_name, enum file_mode mode) {
   FILE *file;
+  const char *mod;
   if(!strcmp(file_name, "-")) {
-    file = mode == INPUT ? stdin : stdout;
+    file = (mode == INPUT_TEXT || mode == INPUT_BIN) ? stdin : stdout;
   } else {
-    file = fopen(file_name, mode == INPUT ? "r" : "w");
+    switch (mode) {
+    case INPUT_TEXT:
+      mod = "r";
+      break;
+    case INPUT_BIN:
+      mod = "rb";
+      break;
+    case OUTPUT_TEXT:
+      mod = "w";
+      break;
+    case OUTPUT_BIN:
+      mod = "wb";
+      break;
+    default:
+      fprintf(stderr, "Invalid file mode.\n");
+      return NULL;
+      break;
+    }
+    file = fopen(file_name, mod);
     if(!file) {
       fprintf(stderr, "Failed opening '%s'!\n", file_name);
       return NULL;
@@ -61,7 +81,7 @@ FILE *open_file(const char *file_name, int mode) {
 }
 
 unsigned char get_algorithm(EVP_PKEY *key) {
-  int type = EVP_PKEY_type(key->type);
+  int type = EVP_PKEY_type(EVP_PKEY_id(key));
   switch(type) {
     case EVP_PKEY_RSA:
       {
@@ -255,172 +275,49 @@ int set_length(unsigned char *buffer, int length) {
   }
 }
 
-int get_object_id(enum enum_slot slot) {
-  int object;
+int get_slot_hex(enum enum_slot slot_enum) {
+  int slot = -1;
 
-  switch(slot) {
+  switch (slot_enum) {
     case slot_arg_9a:
-      object = YKPIV_OBJ_AUTHENTICATION;
+      slot = 0x9a;
       break;
     case slot_arg_9c:
-      object = YKPIV_OBJ_SIGNATURE;
-      break;
     case slot_arg_9d:
-      object = YKPIV_OBJ_KEY_MANAGEMENT;
-      break;
     case slot_arg_9e:
-      object = YKPIV_OBJ_CARD_AUTH;
+      slot = 0x9c + ((int)slot_enum - (int)slot_arg_9c);
       break;
     case slot_arg_82:
-      object = YKPIV_OBJ_RETIRED1;
-      break;
     case slot_arg_83:
-      object = YKPIV_OBJ_RETIRED2;
-      break;
     case slot_arg_84:
-      object = YKPIV_OBJ_RETIRED3;
-      break;
     case slot_arg_85:
-      object = YKPIV_OBJ_RETIRED4;
-      break;
     case slot_arg_86:
-      object = YKPIV_OBJ_RETIRED5;
-      break;
     case slot_arg_87:
-      object = YKPIV_OBJ_RETIRED6;
-      break;
     case slot_arg_88:
-      object = YKPIV_OBJ_RETIRED7;
-      break;
     case slot_arg_89:
-      object = YKPIV_OBJ_RETIRED8;
-      break;
     case slot_arg_8a:
-      object = YKPIV_OBJ_RETIRED9;
-      break;
     case slot_arg_8b:
-      object = YKPIV_OBJ_RETIRED10;
-      break;
     case slot_arg_8c:
-      object = YKPIV_OBJ_RETIRED11;
-      break;
     case slot_arg_8d:
-      object = YKPIV_OBJ_RETIRED12;
-      break;
     case slot_arg_8e:
-      object = YKPIV_OBJ_RETIRED13;
-      break;
     case slot_arg_8f:
-      object = YKPIV_OBJ_RETIRED14;
-      break;
     case slot_arg_90:
-      object = YKPIV_OBJ_RETIRED15;
-      break;
     case slot_arg_91:
-      object = YKPIV_OBJ_RETIRED16;
-      break;
     case slot_arg_92:
-      object = YKPIV_OBJ_RETIRED17;
-      break;
     case slot_arg_93:
-      object = YKPIV_OBJ_RETIRED18;
-      break;
     case slot_arg_94:
-      object = YKPIV_OBJ_RETIRED19;
-      break;
     case slot_arg_95:
-      object = YKPIV_OBJ_RETIRED20;
+      slot = 0x82 + ((int)slot_enum - (int)slot_arg_82);
       break;
     case slot_arg_f9:
-      object = YKPIV_OBJ_ATTESTATION;
+      slot = 0xf9;
       break;
     case slot__NULL:
     default:
-      object = 0;
+      slot = -1;
   }
-  return object;
-}
 
-int key_to_object_id(int key) {
-  int object;
-
-  switch(key) {
-  case YKPIV_KEY_AUTHENTICATION:
-    object = YKPIV_OBJ_AUTHENTICATION;
-    break;
-  case YKPIV_KEY_CARDMGM:
-    object = YKPIV_OBJ_SIGNATURE;
-    break;
-  case YKPIV_KEY_KEYMGM:
-    object = YKPIV_OBJ_KEY_MANAGEMENT;
-    break;
-  case YKPIV_KEY_CARDAUTH:
-    object = YKPIV_OBJ_CARD_AUTH;
-    break;
-  case YKPIV_KEY_RETIRED1:
-    object = YKPIV_OBJ_RETIRED1;
-    break;
-  case YKPIV_KEY_RETIRED2:
-    object = YKPIV_OBJ_RETIRED2;
-    break;
-  case YKPIV_KEY_RETIRED3:
-    object = YKPIV_OBJ_RETIRED3;
-    break;
-  case YKPIV_KEY_RETIRED4:
-    object = YKPIV_OBJ_RETIRED4;
-    break;
-  case YKPIV_KEY_RETIRED5:
-    object = YKPIV_OBJ_RETIRED5;
-    break;
-  case YKPIV_KEY_RETIRED6:
-    object = YKPIV_OBJ_RETIRED6;
-    break;
-  case YKPIV_KEY_RETIRED7:
-    object = YKPIV_OBJ_RETIRED7;
-    break;
-  case YKPIV_KEY_RETIRED8:
-    object = YKPIV_OBJ_RETIRED8;
-    break;
-  case YKPIV_KEY_RETIRED9:
-    object = YKPIV_OBJ_RETIRED9;
-    break;
-  case YKPIV_KEY_RETIRED10:
-    object = YKPIV_OBJ_RETIRED10;
-    break;
-  case YKPIV_KEY_RETIRED11:
-    object = YKPIV_OBJ_RETIRED11;
-    break;
-  case YKPIV_KEY_RETIRED12:
-    object = YKPIV_OBJ_RETIRED12;
-    break;
-  case YKPIV_KEY_RETIRED13:
-    object = YKPIV_OBJ_RETIRED13;
-    break;
-  case YKPIV_KEY_RETIRED14:
-    object = YKPIV_OBJ_RETIRED14;
-    break;
-  case YKPIV_KEY_RETIRED15:
-    object = YKPIV_OBJ_RETIRED15;
-    break;
-  case YKPIV_KEY_RETIRED16:
-    object = YKPIV_OBJ_RETIRED16;
-    break;
-  case YKPIV_KEY_RETIRED17:
-    object = YKPIV_OBJ_RETIRED17;
-    break;
-  case YKPIV_KEY_RETIRED18:
-    object = YKPIV_OBJ_RETIRED18;
-    break;
-  case YKPIV_KEY_RETIRED19:
-    object = YKPIV_OBJ_RETIRED19;
-    break;
-  case YKPIV_KEY_RETIRED20:
-    object = YKPIV_OBJ_RETIRED20;
-    break;
-  default:
-    object = 0;
-  }
-  return object;
+  return slot;
 }
 
 bool set_component(unsigned char *in_ptr, const BIGNUM *bn, int element_len) {
@@ -437,27 +334,25 @@ bool set_component(unsigned char *in_ptr, const BIGNUM *bn, int element_len) {
 }
 
 bool prepare_rsa_signature(const unsigned char *in, unsigned int in_len, unsigned char *out, unsigned int *out_len, int nid) {
-  X509_SIG digestInfo;
-  X509_ALGOR algor;
+  X509_SIG *digestInfo;
+  X509_ALGOR *algor;
   ASN1_TYPE parameter;
-  ASN1_OCTET_STRING digest;
+  ASN1_OCTET_STRING *digest;
   unsigned char data[1024];
 
   memcpy(data, in, in_len);
 
-  digestInfo.algor = &algor;
-  digestInfo.algor->algorithm = OBJ_nid2obj(nid);
-  digestInfo.algor->parameter = &parameter;
-  digestInfo.algor->parameter->type = V_ASN1_NULL;
-  digestInfo.algor->parameter->value.ptr = NULL;
-  digestInfo.digest = &digest;
-  digestInfo.digest->data = data;
-  digestInfo.digest->length = (int)in_len;
-  *out_len = (unsigned int)i2d_X509_SIG(&digestInfo, &out);
+  digestInfo = X509_SIG_new();
+  X509_SIG_getm(digestInfo, &algor, &digest);
+  algor->algorithm = OBJ_nid2obj(nid);
+  X509_ALGOR_set0(algor, OBJ_nid2obj(nid), V_ASN1_NULL, NULL);
+  ASN1_STRING_set(digest, data, in_len);
+  *out_len = (unsigned int)i2d_X509_SIG(digestInfo, &out);
+  X509_SIG_free(digestInfo);
   return true;
 }
 
-bool read_pw(const char *name, char *pwbuf, size_t pwbuflen, int verify) {
+bool read_pw(const char *name, char *pwbuf, size_t pwbuflen, int verify, int stdin_input) {
   #define READ_PW_PROMPT_BASE "Enter %s: "
   char prompt[sizeof(READ_PW_PROMPT_BASE) + 32] = {0};
   int ret;
@@ -465,6 +360,18 @@ bool read_pw(const char *name, char *pwbuf, size_t pwbuflen, int verify) {
   if (pwbuflen < 1) {
     fprintf(stderr, "Failed to read %s: buffer too small.", name);
     return false;
+  }
+
+  if(stdin_input) {
+    fprintf(stdout, "%s\n", name);
+    if(fgets(pwbuf, pwbuflen, stdin)) {
+      if(pwbuf[strlen(pwbuf) - 1] == '\n') {
+        pwbuf[strlen(pwbuf) - 1] = '\0';
+      }
+      return true;
+    } else {
+      return false;
+    }
   }
 
   ret = snprintf(prompt, sizeof(prompt), READ_PW_PROMPT_BASE, name);
@@ -624,20 +531,24 @@ int SSH_write_X509(FILE *fp, X509 *x) {
     return ret;
   }
 
-  switch (pkey->type) {
+  switch (EVP_PKEY_id(pkey)) {
   case EVP_PKEY_RSA:
   case EVP_PKEY_RSA2: {
     RSA *rsa;
     unsigned char n[256];
+    const BIGNUM *bn_n;
 
     char rsa_id[] = "\x00\x00\x00\x07ssh-rsa";
     char rsa_f4[] = "\x00\x00\x00\x03\x01\x00\x01";
 
     rsa = EVP_PKEY_get1_RSA(pkey);
+    RSA_get0_key(rsa, &bn_n, NULL, NULL);
 
-    set_component(n, rsa->n, RSA_size(rsa));
+    if (!set_component(n, bn_n, RSA_size(rsa))) {
+      break;
+    }
 
-    uint32_t bytes = BN_num_bytes(rsa->n);
+    uint32_t bytes = BN_num_bytes(bn_n);
     char len_buf[5];
     int len = 4;
 
