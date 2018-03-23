@@ -1,3 +1,11 @@
+yubico-piv-tool (1.5.0-1tzhuan) unstable; urgency=medium
+
+  * New upstream version.
+  * Update dependencies
+  * Add patch for $(top_srcdir) != $(top_builddir)
+
+ -- Tz-Huan Huang <tzhuan@gmail.com>  Sat, 24 Mar 2018 01:09:57 +0800
+
 yubico-piv-tool (1.4.2-2) unstable; urgency=medium
 
   * Fix openssl 1.1 ftbfs.  Closes: #828616.
