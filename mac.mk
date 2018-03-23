@@ -26,7 +26,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 PACKAGE=yubico-piv-tool
-OPENSSLVERSION=1.0.2h
+OPENSSLVERSION=1.0.2m
 CFLAGS="-mmacosx-version-min=10.6"
 
 all: usage mac
@@ -49,7 +49,7 @@ doit:
 	tar xfz openssl-$(OPENSSLVERSION).tar.gz && \
 	cd openssl-$(OPENSSLVERSION) && \
 	./Configure darwin64-x86_64-cc shared no-ssl2 no-ssl3 no-engines --prefix=$(PWD)/tmp/root $(CFLAGS) && \
-	make all install_sw && \
+	make all install_sw VERSION="$(OPENSSLVERSION)" && \
 	cp LICENSE $(PWD)/tmp$(ARCH)/root/licenses/openssl.txt && \
 	rm -rf $(PWD)/tmp/root/ssl/ && \
 	rm -rf $(PWD)/tmp/root/bin/ && \
@@ -76,6 +76,8 @@ doit:
 		echo "something is incorrectly linked!"; \
 		exit 1; \
 	fi && \
+	rm $(PWD)/tmp/root/lib/*.la && \
+	rm -rf $(PWD)/tmp/root/lib/pkgconfig && \
 	cp COPYING $(PWD)/tmp/root/licenses/$(PACKAGE).txt && \
 	cd .. && \
 	cd root && \

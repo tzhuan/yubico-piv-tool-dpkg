@@ -28,6 +28,7 @@
  *
  */
 
+#include "../../tool/openssl-compat.h"
 #include <ykcs11.h>
 #include <ykcs11-version.h>
 
@@ -38,6 +39,13 @@
 #include <openssl/bn.h>
 #include <openssl/x509.h>
 #include <openssl/rand.h>
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpointer-sign"
+
+#ifdef __MINGW32__
+#define dprintf(fd, ...) fprintf(stdout, __VA_ARGS__)
+#endif
 
 void dump_hex(const unsigned char *buf, unsigned int len, FILE *output, int space) {
   unsigned int i;
@@ -104,10 +112,11 @@ static void test_initalize() {
 
 }
 
-static void test_token_info() {
+static int test_token_info() {
 
   const CK_CHAR_PTR TOKEN_LABEL  = "YubiKey PIV";
   const CK_CHAR_PTR TOKEN_MODEL  = "YubiKey ";  // Skip last 3 characters (version dependent)
+  const CK_CHAR_PTR TOKEN_MODEL_YK4  = "YubiKey YK4";
   const CK_CHAR_PTR TOKEN_SERIAL = "1234";
   const CK_FLAGS TOKEN_FLAGS = CKF_RNG | CKF_LOGIN_REQUIRED | CKF_USER_PIN_INITIALIZED | CKF_TOKEN_INITIALIZED;
   const CK_VERSION HW = {0, 0};
@@ -132,16 +141,22 @@ static void test_token_info() {
   asrt(info.ulFreePublicMemory, CK_UNAVAILABLE_INFORMATION, "FREE_PUB_MEM");
   asrt(info.ulTotalPrivateMemory, CK_UNAVAILABLE_INFORMATION, "TOTAL_PVT_MEM");
   asrt(info.ulFreePrivateMemory, CK_UNAVAILABLE_INFORMATION, "FREE_PVT_MEM");
+
+  if (strncmp(info.model, TOKEN_MODEL_YK4, strlen(TOKEN_MODEL_YK4)) != 0) {
+    dprintf(0, "\n\n** WARNING: Only YK4 supported.  Skipping remaining tests.\n\n");
+    return -1;
+  }
+
   asrt(info.hardwareVersion.major, HW.major, "HW_MAJ");
   asrt(info.hardwareVersion.minor, HW.minor, "HW_MIN");
 
   if (info.firmwareVersion.major != 4 && info.firmwareVersion.major != 0)
     asrt(info.firmwareVersion.major, 4, "FW_MAJ");
 
-  asrt(strcmp(info.utcTime, TOKEN_TIME), 0, "TOKEN_TIME");
+  asrt(strncmp(info.utcTime, TOKEN_TIME, sizeof(info.utcTime)), 0, "TOKEN_TIME");
 
   asrt(funcs->C_Finalize(NULL), CKR_OK, "FINALIZE");
-
+  return 0;
 }
 
 static void test_mechanism_list_and_info() {
@@ -259,6 +274,32 @@ static void test_login() {
 
 }
 
+#if OPENSSL_VERSION_NUMBER >= 0x10100000L
+static int bogus_sign(int dtype, const unsigned char *m, unsigned int m_length,
+               unsigned char *sigret, unsigned int *siglen, const RSA *rsa) {
+  sigret = malloc(1);
+  sigret = "";
+  *siglen = 1;
+  return 0;
+}
+
+static void bogus_sign_cert(X509 *cert) {
+  EVP_PKEY *pkey = EVP_PKEY_new();
+  RSA *rsa = RSA_new();
+  RSA_METHOD *meth = RSA_meth_dup(RSA_get_default_method());
+  BIGNUM *e = BN_new();
+
+  BN_set_word(e, 65537);
+  RSA_generate_key_ex(rsa, 1024, e, NULL);
+  RSA_meth_set_sign(meth, bogus_sign);
+  RSA_set_method(rsa, meth);
+  EVP_PKEY_set1_RSA(pkey, rsa);
+  X509_sign(cert, pkey, EVP_md5());
+  EVP_PKEY_free(pkey);
+}
+#endif
+
+
 // Import a newly generated P256 pvt key and a certificate
 // to every slot and use the key to sign some data
 static void test_import_and_sign_all_10() {
@@ -344,11 +385,15 @@ static void test_import_and_sign_all_10() {
   X509_set_notBefore(cert, tm);
   X509_set_notAfter(cert, tm);
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
   cert->sig_alg->algorithm = OBJ_nid2obj(8);
   cert->cert_info->signature->algorithm = OBJ_nid2obj(8);
 
   ASN1_BIT_STRING_set_bit(cert->signature, 8, 1);
   ASN1_BIT_STRING_set(cert->signature, "\x00", 1);
+#else
+  bogus_sign_cert(cert);
+#endif
 
   p = value_c;
   if ((cert_len = (CK_ULONG) i2d_X509(cert, &p)) == 0 || cert_len > sizeof(value_c))
@@ -371,7 +416,7 @@ static void test_import_and_sign_all_10() {
   for (i = 0; i < 24; i++) {
     for (j = 0; j < 10; j++) {
 
-      if(RAND_pseudo_bytes(some_data, sizeof(some_data)) == -1)
+      if(RAND_bytes(some_data, sizeof(some_data)) == -1)
         exit(EXIT_FAILURE);
 
       asrt(funcs->C_Login(session, CKU_USER, "123456", 6), CKR_OK, "Login USER");
@@ -466,6 +511,7 @@ static void test_import_and_sign_all_10_RSA() {
   CK_BYTE_PTR s_ptr;
   CK_ULONG    r_len;
   CK_ULONG    s_len;
+  const BIGNUM *bp, *bq, *biqmp, *bdmp1, *bdmq1;
 
   unsigned char  *px;
 
@@ -508,11 +554,13 @@ static void test_import_and_sign_all_10_RSA() {
 
   asrt(RSA_generate_key_ex(rsak, 1024, e_bn, NULL), 1, "GENERATE RSAK");
 
-  asrt(BN_bn2bin(rsak->p, p), 64, "GET P");
-  asrt(BN_bn2bin(rsak->q, q), 64, "GET Q");
-  asrt(BN_bn2bin(rsak->dmp1, dp), 64, "GET DP");
-  asrt(BN_bn2bin(rsak->dmq1, dp), 64, "GET DQ");
-  asrt(BN_bn2bin(rsak->iqmp, qinv), 64, "GET QINV");
+  RSA_get0_factors(rsak, &bp, &bq);
+  RSA_get0_crt_params(rsak, &bdmp1, &bdmq1, &biqmp);
+  asrt(BN_bn2bin(bp, p), 64, "GET P");
+  asrt(BN_bn2bin(bq, q), 64, "GET Q");
+  asrt(BN_bn2bin(bdmp1, dp), 64, "GET DP");
+  asrt(BN_bn2bin(bdmq1, dp), 64, "GET DQ");
+  asrt(BN_bn2bin(biqmp, qinv), 64, "GET QINV");
 
 
 
@@ -535,11 +583,16 @@ static void test_import_and_sign_all_10_RSA() {
   X509_set_notBefore(cert, tm);
   X509_set_notAfter(cert, tm);
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+  /* putting bogus data to signature to make some checks happy */
   cert->sig_alg->algorithm = OBJ_nid2obj(8);
   cert->cert_info->signature->algorithm = OBJ_nid2obj(8);
 
   ASN1_BIT_STRING_set_bit(cert->signature, 8, 1);
   ASN1_BIT_STRING_set(cert->signature, "\x00", 1);
+#else
+  bogus_sign_cert(cert);
+#endif
 
   px = value_c;
   if ((cert_len = (CK_ULONG) i2d_X509(cert, &px)) == 0 || cert_len > sizeof(value_c))
@@ -562,7 +615,7 @@ static void test_import_and_sign_all_10_RSA() {
   for (i = 0; i < 24; i++) {
     for (j = 0; j < 10; j++) {
 
-      if(RAND_pseudo_bytes(some_data, sizeof(some_data)) == -1)
+      if(RAND_bytes(some_data, sizeof(some_data)) == -1)
         exit(EXIT_FAILURE);
 
       asrt(funcs->C_Login(session, CKU_USER, "123456", 6), CKR_OK, "Login USER");
@@ -627,6 +680,15 @@ static void test_import_and_sign_all_10_RSA() {
 }
 #endif
 
+int destruction_confirmed(void) {
+  char *confirmed = getenv("YKPIV_ENV_HWTESTS_CONFIRMED");
+  if (confirmed && confirmed[0] == '1')
+    return 1;
+  // Use dprintf() to write directly to stdout, since automake eats the standard stdout/stderr pointers.
+  dprintf(0, "\n***\n*** Hardware tests skipped.  Run \"make hwcheck\".\n***\n\n");
+  return 0;
+}
+
 int main(void) {
 
   get_functions(&funcs);
@@ -634,8 +696,15 @@ int main(void) {
   test_lib_info();
 
 #ifdef HW_TESTS
+  // Require user confirmation to continue, since this test suite will clear
+  // any data stored on connected keys.
+  if (!destruction_confirmed())
+    exit(77); // exit code 77 == skipped tests
+
   test_initalize();
-  test_token_info();
+  // Require YK4 to continue.  Skip if different model found.
+  if (test_token_info() != 0)
+    exit(77);
   test_mechanism_list_and_info();
   test_session();
   test_login();
@@ -648,3 +717,5 @@ int main(void) {
   return EXIT_SUCCESS;
 
 }
+
+#pragma clang diagnostic pop

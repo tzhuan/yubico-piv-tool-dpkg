@@ -40,7 +40,7 @@ noinst_LTLIBRARIES = libpiv_cmd.la libpiv_util.la
 libpiv_cmd_la_SOURCES = cmdline.ggo cmdline.c cmdline.h
 libpiv_cmd_la_CFLAGS =
 
-libpiv_util_la_SOURCES = util.c util.h
+libpiv_util_la_SOURCES = util.c util.h openssl-compat.c openssl-compat.h
 libpiv_util_la_LIBADD = $(top_builddir)/lib/libykpiv.la $(OPENSSL_LIBS)
 
 cmdline.c cmdline.h: cmdline.ggo Makefile.am $(top_srcdir)/configure.ac
@@ -54,7 +54,7 @@ MAINTAINERCLEANFILES = $(BUILT_SOURCES)
 dist_man_MANS = yubico-piv-tool.1
 MAINTAINERCLEANFILES += $(dist_man_MANS)
 
-yubico-piv-tool.1: $(yubico_piv_tool_SOURCES) $(libpiv_cmd_la_SOURCES)
+yubico-piv-tool.1: $(yubico_piv_tool_SOURCES) $(libpiv_cmd_la_SOURCES) $(top_srcdir)/configure.ac | $(builddir)/yubico-piv-tool$(EXEEXT)
 	$(HELP2MAN) --no-info \
 		--name="Yubico PIV tool" \
 		--include=$(srcdir)/yubico-piv-tool.h2m \
