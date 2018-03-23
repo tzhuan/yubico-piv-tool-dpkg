@@ -26,7 +26,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 PACKAGE=yubico-piv-tool
-OPENSSLVERSION=1.0.2h
+OPENSSLVERSION=1.0.2l
 
 all: usage 32bit 64bit
 
@@ -60,6 +60,7 @@ doit:
 	cd $(PACKAGE)-$(VERSION)/ && \
 	CC=$(HOST)-gcc PKG_CONFIG_PATH=$(PWD)/tmp$(ARCH)/root/lib/pkgconfig lt_cv_deplibs_check_method=pass_all ./configure --host=$(HOST) --build=x86_64-unknown-linux-gnu --prefix=$(PWD)/tmp$(ARCH)/root LDFLAGS=-L$(PWD)/tmp$(ARCH)/root/lib CPPFLAGS=-I$(PWD)/tmp$(ARCH)/root/include && \
 	make install $(CHECK) && \
+	rm $(PWD)/tmp$(ARCH)/root/lib/*.la && \
 	rm -rf $(PWD)/tmp$(ARCH)/root/lib/pkgconfig/ && \
 	cp COPYING $(PWD)/tmp$(ARCH)/root/licenses/$(PACKAGE).txt && \
 	cd .. && \

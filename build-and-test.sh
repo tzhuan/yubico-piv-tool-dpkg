@@ -1,3 +1,5 @@
+#!/bin/sh
+
 # Copyright (c) 2014-2016 Yubico AB
 # All rights reserved.
 #
@@ -25,42 +27,44 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-SUBDIRS = . tests
 
-AM_CFLAGS = $(WERROR_CFLAGS) $(WARN_CFLAGS)
-AM_CPPFLAGS = $(OPENSSL_CFLAGS)
-AM_CPPFLAGS += -I$(top_srcdir)/lib -I$(top_builddir)/lib
+if [ "x$TRAVIS_OS_NAME" != "xosx" ]; then
+    sudo apt-get update -qq
+    sudo apt-get remove -qq -y $REMOVE
+    sudo apt-get autoremove -qq
+    sudo apt-get install -qq -y gengetopt help2man $EXTRA
+    TAR=tar
+else
+    ARCH=osx
+    brew update
+    brew uninstall libtool
+    brew install libtool
+    brew install help2man
+    brew install pkg-config
+    brew install gengetopt
+    brew install gnu-tar
+    TAR=gtar
+fi
 
-bin_PROGRAMS = yubico-piv-tool
-yubico_piv_tool_SOURCES = yubico-piv-tool.c yubico-piv-tool.h2m
-yubico_piv_tool_LDADD = $(OPENSSL_LIBS) $(top_builddir)/lib/libykpiv.la
-yubico_piv_tool_LDADD += libpiv_cmd.la libpiv_util.la
+set -e
 
-noinst_LTLIBRARIES = libpiv_cmd.la libpiv_util.la
-libpiv_cmd_la_SOURCES = cmdline.ggo cmdline.c cmdline.h
-libpiv_cmd_la_CFLAGS =
+autoreconf -ifv
 
-libpiv_util_la_SOURCES = util.c util.h
-libpiv_util_la_LIBADD = $(top_builddir)/lib/libykpiv.la $(OPENSSL_LIBS)
-
-cmdline.c cmdline.h: cmdline.ggo Makefile.am $(top_srcdir)/configure.ac
-	$(GENGETOPT) --input $^
-
-BUILT_SOURCES = cmdline.c cmdline.h
-MAINTAINERCLEANFILES = $(BUILT_SOURCES)
-
-# Doc.
-
-dist_man_MANS = yubico-piv-tool.1
-MAINTAINERCLEANFILES += $(dist_man_MANS)
-
-yubico-piv-tool.1: $(yubico_piv_tool_SOURCES) $(libpiv_cmd_la_SOURCES) $(top_srcdir)/configure.ac | $(builddir)/yubico-piv-tool$(EXEEXT)
-	$(HELP2MAN) --no-info \
-		--name="Yubico PIV tool" \
-		--include=$(srcdir)/yubico-piv-tool.h2m \
-		--output=$@ $(builddir)/yubico-piv-tool$(EXEEXT)
-
-if ENABLE_COV
-AM_CFLAGS += --coverage
-AM_LDFLAGS = --coverage
-endif
+if [ "x$ARCH" != "x" ]; then
+    version=`cat NEWS  | grep unreleased | cut -d' ' -f3`
+    set +e
+    $TAR --exclude .git --transform="s/^\./yubico-piv-tool-${version}/" -czf yubico-piv-tool-${version}.tar.gz .
+    set -e
+    if [ "x$ARCH" != "xosx" ]; then
+        make -f windows.mk ${ARCH}bit VERSION=$version
+    else
+        make -f mac.mk mac VERSION=$version
+    fi
+else
+    ./configure $COVERAGE
+    make check
+    if [ "x$COVERAGE" != "x" ]; then
+        gem install coveralls-lcov
+        coveralls-lcov coverage/app2.info
+    fi
+fi
